@@ -149,6 +149,163 @@ bt_co %>%
 bt_sub <- read_csv(here(path, "bb_bt_round_04.csv"))
 glimpse(bt_sub)
 
+
+# three xgboost models because why not ------------------------------------
+
+# # log transformed data --------------------------------------------------
+train_log <- train %>% 
+  mutate(target_carbon_monoxide = log(target_carbon_monoxide + 1),
+         target_benzene = log(target_benzene + 1),
+         target_nitrogen_oxides = log(target_nitrogen_oxides + 1))
+
+set.seed(406)
+split <- initial_split(train_log)
+train_split_co <- training(split)
+test_split_co <- testing(split)
+
+set.seed(406)
+folds <- vfold_cv(train_log, v = 5)
+
+xgb_rec_co <- recipe(target_carbon_monoxide ~ date_time + deg_C + relative_humidity +
+                       sensor_1 + sensor_2 + sensor_3 + sensor_4 + sensor_5, 
+                     data = train_log) %>% 
+  step_date(date_time, keep_original_cols = FALSE) %>% 
+  #update_role(date_time, new_role = "id") %>% 
+  step_dummy(all_nominal_predictors())
+
+xgb_rec_co %>% 
+  prep() %>% 
+  juice() %>% 
+  glimpse()
+
+xgb_wf_co <- workflow() %>% 
+  add_recipe(xgb_rec_co) %>% 
+  add_model(boost_tree("regression",
+                       mtry = tune(),
+                       trees = tune(),
+                       learn_rate = 0.02) %>% 
+              set_engine("xgboost"))
+
+xgb_tune_co <- xgb_wf_co %>% 
+  tune_grid(folds,
+            grid = crossing(mtry = seq(2, 4),
+                            trees = seq(300, 800, 100)),
+            control = grid_control)
+
+autoplot(xgb_tune_co)
+
+# from Tony
+xgb_tune_co$.notes[[1]]
+# from Emil
+fit(xgb_wf_co, train_log)
+
+xgb_wf_best_co <- xgb_wf_co %>% 
+  finalize_workflow(select_best(xgb_tune_co))
+
+xgb_fit_best_co <- xgb_wf_best_co %>% 
+  fit(train_log)
+
+importances <- xgboost::xgb.importance(model = xgb_fit_best_co$fit$fit$fit)
+
+importances %>%
+  mutate(Feature = fct_reorder(Feature, Gain)) %>%
+  ggplot(aes(Gain, Feature)) +
+  geom_point()
+
+predictions_co <- xgb_fit_best_co %>% 
+  augment(test)
+
+glimpse(predictions_co)
+
+# benzene
+xgb_rec_bnz <- recipe(target_benzene ~ date_time + deg_C + relative_humidity +
+                       sensor_1 + sensor_2 + sensor_3 + sensor_4 + sensor_5, 
+                     data = train_log) %>% 
+  step_date(date_time, keep_original_cols = FALSE) %>% 
+  #update_role(date_time, new_role = "id") %>% 
+  step_dummy(all_nominal_predictors())
+
+xgb_wf_bnz <- workflow() %>% 
+  add_recipe(xgb_rec_bnz) %>% 
+  add_model(boost_tree("regression",
+                       mtry = tune(),
+                       trees = tune(),
+                       learn_rate = 0.02) %>% 
+              set_engine("xgboost"))
+
+xgb_tune_bnz <- xgb_wf_bnz %>% 
+  tune_grid(folds,
+            grid = crossing(mtry = seq(2, 4),
+                            trees = seq(300, 800, 100)),
+            control = grid_control)
+
+xgb_wf_best_bnz <- xgb_wf_bnz %>% 
+  finalize_workflow(select_best(xgb_tune_bnz))
+
+xgb_fit_best_bnz <- xgb_wf_best_bnz %>% 
+  fit(train_log)
+
+predictions_bnz <- xgb_fit_best_bnz %>% 
+  augment(test)
+
+glimpse(predictions_bnz)
+
+# nitrogen oxides
+xgb_rec_no <- recipe(target_nitrogen_oxides ~ date_time + deg_C + relative_humidity +
+                        sensor_1 + sensor_2 + sensor_3 + sensor_4 + sensor_5, 
+                      data = train_log) %>% 
+  step_date(date_time, keep_original_cols = FALSE) %>% 
+  #update_role(date_time, new_role = "id") %>% 
+  step_dummy(all_nominal_predictors())
+
+xgb_wf_no <- workflow() %>% 
+  add_recipe(xgb_rec_no) %>% 
+  add_model(boost_tree("regression",
+                       mtry = tune(),
+                       trees = tune(),
+                       learn_rate = 0.02) %>% 
+              set_engine("xgboost"))
+
+xgb_tune_no <- xgb_wf_no %>% 
+  tune_grid(folds,
+            grid = crossing(mtry = seq(2, 4),
+                            trees = seq(300, 800, 100)),
+            control = grid_control)
+
+xgb_wf_best_no <- xgb_wf_no %>% 
+  finalize_workflow(select_best(xgb_tune_no))
+
+xgb_fit_best_no <- xgb_wf_best_no %>% 
+  fit(train_log)
+
+predictions_no <- xgb_fit_best_no %>% 
+  augment(test)
+
+glimpse(predictions_no)
+
+# putting it all together
+pred_co <- predictions_co %>% 
+  mutate(target_carbon_monoxide = expm1(.pred))
+
+pred_bnz <- predictions_bnz %>% 
+  mutate(target_benzene = expm1(.pred)) %>% 
+  select(date_time, target_benzene)
+
+pred_no <- predictions_no %>% 
+  mutate(target_nitrogen_oxides = expm1(.pred)) %>% 
+  select(date_time, target_nitrogen_oxides)
+
+xgb_preds <- pred_co %>% 
+  select(date_time, target_carbon_monoxide) %>% 
+  left_join(pred_bnz, by = "date_time") %>% 
+  left_join(pred_no, by = "date_time")
+
+glimpse(xgb_preds)
+
+xgb_preds %>% 
+  mutate(date_time = strftime(date_time, tz = "UTC")) %>%
+  write_csv(here(path, "xgb_02.csv"))
+
 # notes -------------------------------------------------------------------
 #' - with the {tidymodels} framework, we may not be able to do multivariate
 #'   predictions. in other words, we'll predict each of the outcomes separately
@@ -157,3 +314,8 @@ glimpse(bt_sub)
 #'      our response outcome
 #'      
 #' - may want to log transform the outcome variables -- each is skewed
+#' 
+#' - xgboost can only handle numerics -- this is important! because you forget 
+#'   it! A LOT!
+#'   
+#' - step_date is one of the few steps that doesn't remove original columns
