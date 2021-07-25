@@ -30,8 +30,8 @@ grid_control <- control_grid(save_pred = TRUE,
 # import our data ---------------------------------------------------------
 path <- "00_2021-07-25_kaggle_july_tps/data"
 
-train <- read_csv(here(path, "train.csv"))
-test <- read_csv(here(path, "test.csv"))
+train <- read_csv(here(path, "train.csv")) 
+test <- read_csv(here(path, "test.csv")) 
 sampsub <- read_csv(here(path, "sample_submission.csv"))
 
 glimpse(train)
@@ -49,14 +49,13 @@ plot_histogram(train)
 set.seed(406)
 folds <- vfold_cv(v = 5, data = train)
 
-
 # three bagged trees lol --------------------------------------------------
 # carbon monoxide
 bb_bt_co <- recipe(target_carbon_monoxide ~ date_time, deg_C, relative_humidity,
                    sensor_1, sensor_2, sensor_3, sensor_4, sensor_5, 
-                   data = train) %>% 
-  update_role(date_time, new_role = "id")
-glimpse(bb_bt_co)
+                   data = train) 
+
+#glimpse(bb_bt_co)
 
 bb_bt_spec <- bag_tree(min_n = 10) %>%
   set_engine('rpart', times = 25) %>%
@@ -124,26 +123,30 @@ bb_bt_pred_no <- augment(bb_bt_fit_no, new_data = test)
 
 glimpse(bb_bt_pred_no)
 
-s# bind columns for final submission
+# bind columns for final submission
 bt_co <- bb_bt_pred_co %>% 
   # CHECK FIRST
   select(date_time,
          target_carbon_monoxide = .pred) 
+glimpse(bt_co)
 
 bt_bnz <- bb_bt_pred_bnz %>% 
   select(date_time, 
          target_benzene = .pred)
+glimpse(bt_bnz)
 
 bt_no <- bb_bt_pred_no %>% 
   select(date_time,
          target_nitrogen_oxides = .pred)
+glimpse(bt_no)
 
 bt_co %>% 
   left_join(bt_bnz, by = "date_time") %>% 
-  left_join(bt_no, by = "date_time") %>% 
-  write_csv(here(path, "bb_bt_round_01.csv"))
+  left_join(bt_no, by = "date_time") %>%
+  mutate(date_time = strftime(date_time, tz = "UTC")) %>% 
+  write_csv(here(path, "bb_bt_round_04.csv"))
 
-bt_sub <- read_csv(here(path, "bb_bt_round_01.csv"))
+bt_sub <- read_csv(here(path, "bb_bt_round_04.csv"))
 glimpse(bt_sub)
 
 # notes -------------------------------------------------------------------
